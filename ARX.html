@@ -1,0 +1,1899 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARX | Democratizing Real World Assets</title>
+    <meta name="description" content="Community-based co-ownership of real-world assets. Join the ARX ecosystem.">
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@1,400;1,600&display=swap" rel="stylesheet">
+    
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <!-- Dev Environment Network Error Suppression -->
+    <script>
+        (function(){
+            try {
+                // Only run in local development environments
+                var isLocal = /localhost|127\.0\.0\.1/.test(location.host);
+                if (!isLocal) return;
+
+                // 1. Suppress Console Errors
+                var origError = console.error;
+                console.error = function(){
+                    var args = Array.from(arguments);
+                    var msg = args.join(' ');
+                    
+                    // Filter out known nuisance errors for local dev
+                    var ignorePatterns = [
+                        'Firestore/Listen',
+                        'net::ERR_ABORTED',
+                        'googletagmanager',
+                        'Could not reach Cloud Firestore backend',
+                        'FirebaseError',
+                        'client is offline',
+                        'Backend didn\'t respond within 10 seconds'
+                    ];
+
+                    if (ignorePatterns.some(pattern => msg.includes(pattern))) {
+                        return;
+                    }
+                    
+                    // Also check error objects if passed
+                    if (args.length > 0 && args[0] instanceof Error) {
+                        if (ignorePatterns.some(pattern => args[0].message.includes(pattern))) {
+                            return;
+                        }
+                    }
+
+                    return origError.apply(console, arguments);
+                };
+
+                // 2. Patch XMLHttpRequest to block Firestore Listen channels
+                var origOpen = XMLHttpRequest.prototype.open;
+                var origSend = XMLHttpRequest.prototype.send;
+                var origAbort = XMLHttpRequest.prototype.abort; // Patch abort too
+                
+                XMLHttpRequest.prototype.open = function(method, url){
+                    try {
+                        if (typeof url === 'string' && 
+                            (url.indexOf('firestore.googleapis.com') !== -1 && 
+                             url.indexOf('/Listen/') !== -1)) {
+                            this.__skipFirestoreListen = true;
+                            // We do NOT call origOpen. This leaves readyState at 0 (UNSENT).
+                            // If the library expects readyState 1, it might fail.
+                            // But calling origOpen creates a network resource.
+                            // Let's try to be silent.
+                            return; 
+                        }
+                    } catch(_) {}
+                    return origOpen.apply(this, arguments);
+                };
+                
+                XMLHttpRequest.prototype.send = function(body){
+                    if (this.__skipFirestoreListen) {
+                        // Do nothing. The request hangs forever (no events fired).
+                        return; 
+                    }
+                    return origSend.call(this, body);
+                };
+
+                XMLHttpRequest.prototype.abort = function(){
+                    if (this.__skipFirestoreListen) {
+                        // Silent abort
+                        return;
+                    }
+                    if (origAbort) return origAbort.apply(this, arguments);
+                };
+
+                // 3. Patch Fetch API
+                var origFetch = window.fetch;
+                window.fetch = function(input, init) {
+                    try {
+                        var url = (typeof input === 'string') ? input : (input.url || '');
+                        if (url.indexOf('firestore.googleapis.com') !== -1 && 
+                            url.indexOf('/Listen/') !== -1) {
+                            // Return a pending promise that never resolves
+                            return new Promise(() => {}); 
+                        }
+                    } catch(_) {}
+                    return origFetch.apply(this, arguments);
+                };
+
+            } catch(_) {}
+        })();
+    </script>
+
+    <script src="https://unpkg.com/@solana/web3.js@latest/lib/index.iife.min.js"></script>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Manrope', 'sans-serif'],
+                        serif: ['Playfair Display', 'serif'],
+                        inter: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        ARX: {
+                            bg: '#FFFFFF', 
+                            text: '#0F172A',
+                            accent: '#F1F5F9',
+                            silver: '#CBD5E1',
+                        }
+                    },
+                }
+            }
+        }
+    </script>
+
+    <style>
+        body {
+            background-color: #ffffff;
+            color: #0F172A;
+            /* Ensures scroll does not interfere with fixed nav */
+            padding-top: 6rem; 
+        }
+        
+        /* Ensure the main content is above the 3D canvas */
+        .content-layer {
+            position: relative;
+            z-index: 10; 
+        }
+
+        /* Hero Text Specific Styles */
+        .hero-text {
+            font-family: 'Manrope', sans-serif;
+            letter-spacing: -0.04em;
+        }
+        
+        .serif-italic {
+            font-family: 'Playfair Display', serif;
+            font-style: italic;
+            font-weight: 400;
+        }
+        .hero-text .serif-italic { white-space: nowrap; display: inline-block; }
+        
+        /* Buttons & Animations */
+        .btn-primary {
+            background-color: #000000;
+            color: white;
+            transition: all 0.3s ease;
+        }
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        .fade-up {
+            opacity: 0;
+            transform: translateY(20px);
+            transition: opacity 0.8s ease-out, transform 0.8s ease-out;
+        }
+        .fade-up.visible {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        /* Canvas Positioning – Style Guide
+           Intent: Keep globe to the right, with a minimum 20px margin from adjacent content,
+           avoid text overlap using a 2‑column layout on desktop, stack on mobile.
+           Responsiveness: Sizes scale with viewport; transitions keep movement smooth. */
+        .globe-pane {
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin: 20px;
+            z-index: 0;
+            transition: margin 300ms ease, transform 300ms ease;
+            will-change: margin, transform;
+        }
+        #bg-canvas {
+            position: relative;
+            width: clamp(525px, 40vw, 750px);
+            height: clamp(525px, 40vw, 750px);
+            opacity: 90%;
+            transition: width 300ms ease, height 300ms ease, margin 300ms ease;
+            will-change: width, height, margin;
+        }
+        @media (max-width: 1024px) {
+            #bg-canvas {
+                width: clamp(360px, 70vw, 525px);
+                height: clamp(360px, 70vw, 525px);
+            }
+        }
+        #pin-tooltip {
+            position: fixed;
+            pointer-events: none;
+            background: rgba(0,0,0,0.8);
+            color: #fff;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            transform: translate(-50%, -120%);
+            white-space: nowrap;
+            z-index: 50;
+            display: none;
+        }
+        #bg-canvas:hover { cursor: pointer; }
+    </style>
+</head>
+<body class="overflow-x-hidden selection:bg-black selection:text-white">
+
+    <nav class="fixed w-full z-50 top-0 pt-6 bg-white/80 backdrop-blur-sm">
+        <div class="max-w-7xl mx-auto px-6 flex justify-between items-center">
+            
+            <div class="flex items-center gap-2">
+                <div class="w-12 h-12 bg-white hover:bg-white active:bg-white focus:bg-white rounded-lg flex items-center justify-center border border-slate-200">
+                    <img src="https://i.imgur.com/TD8wbK3.png" alt="Colosseum Logo" class="w-8 h-8">
+                </div>
+                <span class="font-sans text-xl font-bold tracking-tight text-black">ARX</span>
+            </div>
+
+            
+            <div class="hidden md:flex items-center bg-[#F8FAFC] px-2 py-1.5 rounded-full border border-slate-100 shadow-sm">
+                <a href="#" class="px-5 py-2 rounded-full bg-white shadow-sm text-sm font-semibold text-black">Home</a>
+                <a href="#model" class="px-5 py-2 rounded-full text-sm font-medium text-slate-500 hover:text-black transition-colors">Features</a>
+                <a href="#llm-tools" class="px-5 py-2 rounded-full text-sm font-medium text-slate-500 hover:text-black transition-colors">Tools</a>
+                <a href="#roadmap" class="px-5 py-2 rounded-full text-sm font-medium text-slate-500 hover:text-black transition-colors">Roadmap</a>
+            </div>
+
+            
+            <div class="hidden md:block">
+                <button id="nav-wallet-btn" class="btn-primary px-6 py-3 rounded-full text-sm font-semibold flex items-center gap-2" onclick="handleNavWalletAction()">
+                    Connect Wallet
+                </button>
+            </div>
+
+            
+            <div class="md:hidden">
+                <button id="mobile-menu-btn" class="p-2 text-black">
+                    <i data-lucide="menu" class="w-6 h-6"></i>
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="content-layer">
+        
+        <section class="relative pt-12 pb-20 lg:pt-0 lg:pb-32 max-w-7xl mx-auto px-6 overflow-hidden">
+            <div class="grid grid-cols-1 lg:grid-cols-2 items-center gap-6">
+                <div class="max-w-4xl relative z-10 pt-20">
+                <h1 class="text-6xl md:text-[5.5rem] leading-[0.95] font-bold hero-text text-black mb-12 fade-up">
+                    Democratizing <br>
+                    <span class="serif-italic text-[6rem] md:text-[6.5rem] font-normal ml-2">RWA <br>Co-Ownership </span>
+                </h1>
+
+                <div class="flex flex-col sm:flex-row items-start gap-6 fade-up" style="transition-delay: 200ms;">
+                    <div class="bg-[#F8FAFC] p-1 pl-1 pr-1 rounded-full border border-slate-100 inline-flex items-center">
+                        <span class="pl-6 pr-4 text-sm font-medium text-slate-600">Join the Waitlist</span>
+                        <button class="w-10 h-10 bg-black rounded-full flex items-center justify-center text-white hover:scale-105 transition-transform">
+                            <i data-lucide="arrow-up-right" class="w-5 h-5"></i>
+                        </button>
+                    </div>
+                    
+                    <div class="pt-2">
+                        <p class="text-lg text-slate-500 leading-relaxed max-w-md">
+                            ARX is a decentralized community owned citadel thats building a self-sustaining treasury for generating long-term value for all members through real-world assets.
+                        </p>
+                    </div>
+                </div>
+                </div>
+                <div class="globe-pane lg:justify-end">
+                    <canvas id="bg-canvas" class="opacity-70"></canvas>
+                </div>
+            </div>
+        </section>
+
+        
+
+
+        <section id="mission" class="py-32 relative">
+            <div class="max-w-7xl mx-auto px-6 flex flex-col items-center justify-center text-center gap-6 min-h-[50vh] center-container">
+                <div class="flex flex-col items-center text-center fade-up">
+                    <div class="w-16 h-16 bg-white border border-slate-200 rounded-xl mb-8 flex items-center justify-center shadow-sm">
+                        <img src="https://i.imgur.com/3m8WW3N.png" alt="Colosseum Logo" class="w-12 h-12">
+                    </div>
+                    <h2 class="text-5xl md:text-7xl font-bold hero-text text-black tracking-tight max-w-5xl leading-[1.1]">
+                        The Financial Engine for <br>
+                        RWA Banking is called <br>
+                        <span class="serif-italic">ARX.</span>
+                    </h2>
+                </div>
+            </div>
+        </section>
+
+        <section id="model" class="py-32 bg-white">
+            <div class="max-w-7xl mx-auto px-6">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-px bg-slate-100 border border-slate-100 overflow-hidden rounded-2xl">
+                    
+                    <div class="bg-white p-12 hover:bg-[#FDFDFD] transition-colors fade-up">
+                        <div class="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-6 border border-slate-100">
+                            <i data-lucide="users" class="w-5 h-5 text-black"></i>
+                        </div>
+                        <h3 class="text-xl font-bold mb-3">Community Owned</h3>
+                        <p class="text-slate-500 leading-relaxed">
+                            Inclusive, yield-generating network. Keycard holders share access, governance rights, and collective ownership.
+                        </p>
+                    </div>
+
+                    
+                    <div class="bg-white p-12 hover:bg-[#FDFDFD] transition-colors fade-up" style="transition-delay: 100ms;">
+                        <div class="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-6 border border-slate-100">
+                            <i data-lucide="building-2" class="w-5 h-5 text-black"></i>
+                        </div>
+                        <h3 class="text-xl font-bold mb-3">Global Properties</h3>
+                        <p class="text-slate-500 leading-relaxed">
+                            Expanding treasury to include properties in strategic, tax-advantaged locations worldwide.
+                        </p>
+                    </div>
+
+                    
+                    <div class="bg-white p-12 hover:bg-[#FDFDFD] transition-colors fade-up" style="transition-delay: 200ms;">
+                        <div class="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center mb-6 border border-slate-100">
+                            <i data-lucide="coins" class="w-5 h-5 text-black"></i>
+                        </div>
+                        <h3 class="text-xl font-bold mb-3">Yield & Appreciation</h3>
+                        <p class="text-slate-500 leading-relaxed">
+                            A self-sustaining treasury generating long-term value via yield and asset appreciation for all members.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section id="deposit-section" class="py-20 bg-white border-y border-slate-100">
+            <div class="max-w-7xl mx-auto px-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-16 items-center">
+                    <div class="fade-up">
+                        <span class="inline-block py-1 px-3 rounded-full bg-black text-white text-xs font-semibold uppercase tracking-wider mb-4">Contribute</span>
+                        <h3 class="text-4xl font-bold mb-4 text-black">Contribute to the Treasury</h3>
+                        <p class="text-slate-500 text-lg leading-relaxed mb-8">
+                            Directly deposit SOL or USDC to the ARX treasury. Your contribution is tracked on-chain and updates the global progress bar in real-time.
+                        </p>
+                        <div class="grid grid-cols-2 gap-8">
+                            <div>
+                                <p class="text-3xl font-bold text-black serif-italic">$2M</p>
+                                <p class="text-sm text-slate-500 font-medium mt-1">Goal</p>
+                            </div>
+                            <div>
+                                <p class="text-3xl font-bold text-black serif-italic" id="deposit-allowance">$50k</p>
+                                <p class="text-sm text-slate-500 font-medium mt-1">Max Allowance</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="bg-white border border-slate-200 rounded-2xl p-8 shadow-lg fade-up" style="transition-delay: 100ms;">
+                        <div class="flex justify-between items-center mb-6">
+                            <h4 class="text-xl font-bold">Make a Deposit</h4>
+                            <div id="wallet-status-indicator" class="flex items-center gap-2 text-sm text-slate-500">
+                                <div id="wallet-dot" class="w-2 h-2 rounded-full bg-slate-300"></div>
+                                <span id="wallet-address-display">Not Connected</span>
+                            </div>
+                        </div>
+                        
+                        <div class="space-y-4">
+                            <div class="grid grid-cols-2 gap-2 p-1 bg-slate-50 rounded-lg border border-slate-200">
+                                <button id="btn-select-sol" class="py-2 rounded-md text-sm font-semibold bg-white shadow-sm text-black transition-all" onclick="selectDepositToken('SOL')">SOL</button>
+                                <button id="btn-select-usdc" class="py-2 rounded-md text-sm font-semibold text-slate-500 hover:text-black transition-all" onclick="selectDepositToken('USDC')">USDC</button>
+                            </div>
+                            
+                            <div class="relative">
+                                <label class="block text-xs font-medium text-slate-500 mb-1 ml-1">Amount</label>
+                                <div class="relative">
+                                    <input type="number" id="deposit-amount" placeholder="0.00" class="w-full pl-4 pr-16 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-black/5 focus:border-black transition-all font-mono text-lg" min="0" step="any">
+                                    <div class="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 font-medium" id="input-ticker">SOL</div>
+                                </div>
+                                <div class="flex justify-between mt-1 px-1">
+                                     <span class="text-xs text-slate-400" id="user-balance">Balance: --</span>
+                                </div>
+                            </div>
+                            
+                            <button id="btn-connect-wallet" class="w-full btn-primary py-4 rounded-xl font-bold text-lg mt-2" onclick="handleWalletAction()">
+                                Connect Wallet
+                            </button>
+                            
+                            <div id="deposit-message" class="hidden p-3 rounded-lg text-sm text-center mt-2 break-all"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        
+        <section class="py-20 bg-[#F8FAFC] border-y border-slate-100">
+            <div class="max-w-7xl mx-auto px-6">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-16 items-center">
+                    <div class="fade-up">
+                        <span class="inline-block py-1 px-3 rounded-full bg-white border border-slate-200 text-xs font-semibold uppercase tracking-wider mb-4">Current Objective</span>
+                        <h3 class="text-4xl font-bold mb-4 text-black">Series A Acquisition</h3>
+                        <p class="text-slate-500 text-lg leading-relaxed mb-8">
+                            We are raising $2M to acquire the first series of properties. This live tracker monitors the Solana treasury in real-time.
+                        </p>
+                        
+                        <div class="flex gap-12 border-t border-slate-200 pt-8">
+                            <div>
+                                
+                                <p id="treasury-value" class="text-3xl font-bold text-black serif-italic">Loading...</p>
+                                <p class="text-sm text-slate-500 font-medium mt-1">Raised So Far</p>
+                            </div>
+                            <div>
+                                
+                                <p id="treasury-percent" class="text-3xl font-bold text-black serif-italic">0%</p>
+                                <p class="text-sm text-slate-500 font-medium mt-1">Funded</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="relative h-64 bg-white border border-slate-100 rounded-2xl p-8 shadow-[0_20px_40px_-15px_rgba(0,0,0,0.05)] fade-up" style="transition-delay: 200ms;">
+                        
+                        <div class="absolute inset-x-8 top-1/2 -translate-y-1/2">
+                            <div class="flex justify-between text-sm font-medium mb-2">
+                                <span id="treasury-status">Scanning Treasury...</span>
+                                <span aria-label="Target Goal">$2,000,000 Goal</span>
+                            </div>
+                            <div class="flex justify-between text-xs text-slate-500 mb-1 font-mono">
+                                <span id="card-treasury-value" aria-label="Current Amount">$0</span>
+                                <span id="card-treasury-percent" aria-label="Percentage Completed">0%</span>
+                            </div>
+                            <div class="w-full h-4 bg-slate-100 rounded-full overflow-hidden">
+                                <div id="progress-bar" role="progressbar" aria-label="Fundraising Progress" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" class="h-full bg-[#4CAF50] min-w-[2%] w-0 transition-all duration-1000 ease-out"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="absolute top-6 right-6">
+                            <div class="animate-pulse">
+                                <i id="treasury-indicator-icon" data-lucide="radio" class="w-6 h-6 text-green-500"></i>
+                            </div>
+                        </div>
+                        <div id="treasury-updated" class="absolute bottom-6 right-8 text-xs text-slate-400 font-mono">
+                            Updated: Live
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        
+
+
+        
+        <section id="llm-tools" class="py-32 bg-[#F8FAFC] border-y border-slate-100">
+    <div class="w-full max-w-7xl mx-auto px-6 center-container">
+            <script>
+                window.ownerId = "ABzmPVaBCNi21tWR23ertNShH3GxxA6rqYkadWSwvnkb"
+                window.collectionId = "yEr6oX8hlH2xWXbpY6CB"
+            </script>
+            <script type="module" src="https://storage.googleapis.com/scriptslmt/0.1.3/solana.js"></script>
+            <link rel="stylesheet" href="https://storage.googleapis.com/scriptslmt/0.1.3/solana.css">
+            <style>
+                .wallet-adapter-button.wallet-adapter-button-trigger { background-color: #C0C0C0 !important; }
+                .wallet-adapter-button.wallet-adapter-button-trigger:not([disabled]):hover { background-color: #C0C0C0 !important; }
+                .center-container { min-height: 50vh; display: flex; align-items: center; justify-content: center; text-align: center; flex-direction: column; gap: 1.5rem; }
+                
+                .genesis-title {
+                    font-family: 'Playfair Display', serif;
+                    font-size: 2.5rem;
+                    font-weight: 400;
+                    font-style: italic;
+                    color: black;
+                    line-height: 1.1;
+                    opacity: 0;
+                    animation: fadeIn 1.5s ease-out forwards;
+                    text-align: center;
+                    letter-spacing: -0.02em;
+                }
+                @media (min-width: 768px) {
+                    .genesis-title { font-size: 3.5rem; }
+                }
+                @keyframes fadeIn {
+                    from { opacity: 0; transform: translateY(20px); }
+                    to { opacity: 1; transform: translateY(0); }
+                }
+            </style>
+            <div class="flex flex-col items-center gap-[15px]">
+                <div class="genesis-title">Mint ARX Genesis Keycard</div>
+                <div id="mint-button-container"></div>
+            </div>
+            <div class="text-xl font-semibold text-slate-700 mt-4">0.1 SOL Mint Price</div>
+            <div id="mint-counter"></div>
+        </div>
+        </section>
+
+        
+        <section id="roadmap" class="py-20">
+            <div class="max-w-3xl mx-auto px-6">
+                <h2 class="text-3xl font-bold mb-16 text-center">Strategic Roadmap</h2>
+                
+                <div class="space-y-12 relative border-l border-slate-200 ml-4 pl-8 md:pl-12">
+                    <div class="relative fade-up">
+                        <span class="absolute -left-[37px] md:-left-[53px] top-1 w-3 h-3 rounded-full bg-black border-4 border-white shadow-sm"></span>
+                        <p class="text-sm text-slate-400 mb-1 font-medium">Phase 01</p>
+                        <h3 class="text-2xl font-bold text-black mb-2">Capital Formation</h3>
+                        <p class="text-slate-500">Raising initial $2M liquidity to acquire Series A properties.</p>
+                    </div>
+
+                    <div class="relative fade-up" style="transition-delay: 100ms;">
+                        <span class="absolute -left-[37px] md:-left-[53px] top-1 w-3 h-3 rounded-full bg-slate-300 border-4 border-white"></span>
+                        <p class="text-sm text-slate-400 mb-1 font-medium">Phase 02</p>
+                        <h3 class="text-2xl font-bold text-slate-400 mb-2">Proof of Concept</h3>
+                        <p class="text-slate-400">Acquisition and setup of governance framework.</p>
+                    </div>
+
+                    <div class="relative fade-up" style="transition-delay: 200ms;">
+                        <span class="absolute -left-[37px] md:-left-[53px] top-1 w-3 h-3 rounded-full bg-slate-200 border-4 border-white"></span>
+                        <p class="text-sm text-slate-400 mb-1 font-medium">Phase 03</p>
+                        <h3 class="text-2xl font-bold text-slate-300 mb-2">Expansion</h3>
+                        <p class="text-slate-400">Global portfolio growth and DeFi lending integration.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        
+        <footer class="bg-white border-t border-slate-100 pt-20 pb-10">
+            <div class="max-w-7xl mx-auto px-6">
+                <div class="flex flex-col md:flex-row justify-between items-start gap-12 mb-20">
+                    <div class="max-w-sm">
+                        <div class="flex items-center gap-2 mb-6">
+                            <div class="w-6 h-6 bg-black rounded-sm flex items-center justify-center">
+                                <img src="https://i.imgur.com/TD8wbK3.png" alt="Citadel Logo" class="w-6 h-6 object-contain">
+                            </div>
+                            <span class="font-bold text-xl">ARX</span>
+                        </div>
+                        <p class="text-slate-500 text-lg">
+                            Reinventing RWA community ownership.
+                        </p>
+                    </div>
+
+                    <div class="flex gap-16 text-sm">
+                        <div class="space-y-4 flex flex-col">
+                            <span class="font-bold text-black">Platform</span>
+                            <a href="#" class="text-slate-500 hover:text-black">Properties <span class="text-xs text-slate-400 ml-1">(Coming Soon)</span></a>
+                            <a href="#" class="text-slate-500 hover:text-black">Governance <span class="text-xs text-slate-400 ml-1">(Coming Soon)</span></a>
+                        </div>
+                        <div class="space-y-4 flex flex-col">
+                            <span class="font-bold text-black">Company</span>
+                            <a href="#" class="text-slate-500 hover:text-black">About</a>
+                            <a href="#" class="text-slate-500 hover:text-black">Legal</a>
+                        </div>
+                        <div class="space-y-4 flex flex-col">
+                            <span class="font-bold text-black">Socials</span>
+                            <a href="#" class="text-slate-500 hover:text-black">Twitter</a>
+                            <a href="#" class="text-slate-500 hover:text-black">Discord</a>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex flex-col md:flex-row justify-between items-center pt-8 border-t border-slate-100">
+                    <p class="text-slate-400 text-sm">© 2025 ARX DAO.</p>
+                    <div class="flex gap-2 mt-4 md:mt-0">
+                        <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                        <span class="text-xs font-medium text-slate-500">Systems Operational</span>
+                    </div>
+                </div>
+            </div>
+        </footer>
+
+
+    </div>
+
+    <script>
+        // Initialize Icons
+        lucide.createIcons();
+
+        // Fade Up Animation
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    entry.target.classList.add('visible');
+                }
+            });
+        }, { threshold: 0.1 });
+
+        document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+
+        // Mobile Menu Placeholder
+        document.getElementById('mobile-menu-btn').addEventListener('click', () => {
+            console.log('Mobile menu toggle');
+        });
+
+        // --- GEMINI API CONSTANTS (LLM Tools) ---
+        // Removed: Tool replaced by NFT Mint section
+
+
+        /**
+         * Generic fetch wrapper with exponential backoff.
+         */
+        async function retryFetch(url, options, maxRetries = 5) {
+            for (let i = 0; i < maxRetries; i++) {
+                try {
+                    console.log(`[Treasury] Fetch attempt ${i + 1}/${maxRetries} to ${url}`);
+                    const response = await fetch(url, options);
+                    
+                    if (response.status === 429 && i < maxRetries - 1) {
+                        const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                        console.log(`[Treasury] Rate limited, retrying in ${delay}ms`);
+                        await new Promise(resolve => setTimeout(resolve, delay));
+                        continue;
+                    }
+                    
+                    if (!response.ok) {
+                        throw new Error(`API call failed with status: ${response.status} ${response.statusText}`);
+                    }
+                    
+                    console.log(`[Treasury] Fetch successful: ${url}`);
+                    return response;
+                } catch (error) {
+                    console.warn(`[Treasury] Fetch attempt ${i + 1} failed:`, error.message);
+                    if (i === maxRetries - 1) {
+                        console.error(`[Treasury] All fetch attempts failed for ${url}`);
+                        throw error;
+                    }
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000;
+                    console.log(`[Treasury] Retrying in ${delay}ms`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+
+
+
+        // --- THREE.JS GLOBAL ASSET MAP ---
+        
+        let scene, camera, renderer, globeMesh, globeGroup, raycaster, mouse, tooltipEl;
+        let pins = [];
+        let isPaused = false;
+        let isManualPaused = false;
+        let clock;
+        let dragging = false;
+        let lastX = 0, lastY = 0, lastTs = 0;
+        let velX = 0, velY = 0;
+        let inertiaVX = 0, inertiaVY = 0;
+        let inertiaDamping = 2.5;
+        let sensitivity = 0.0035;
+        let MIN_PITCH = -Math.PI * 0.45;
+        let MAX_PITCH = Math.PI * 0.45;
+        let lastRaycastAt = 0;
+        let raycastThrottleMs = 24;
+        let selectedPin = null;
+        let pinHighlightMaterial = null;
+        let isFlying = false;
+        let flyStart = 0, flyDuration = 1200;
+        let flyFromX = 0, flyFromY = 0, flyToX = 0, flyToY = 0;
+        let camFromZ = 18, camToZ = 12;
+        const GLOBE_RADIUS = 5;
+        const ROTATIONS_PER_MIN = 0.5;
+        const ANGULAR_SPEED = ROTATIONS_PER_MIN * Math.PI * 2 / 60;
+        const SCALE_MULTIPLIER = 0.8;
+        const GROUP_OFFSET_X = 15;
+        let isVerifyingCamera = false;
+        let verifyStart = 0;
+        let verifyDuration = 1500;
+        let camOrigPos = null;
+        let camOrbitRadius = 0;
+        let hasInit = false;
+
+        // Top RWA target cities (Lat/Lon)
+        const cities = [
+            { name: "New York", lat: 40.71, lon: -74.01 },
+            { name: "London", lat: 51.51, lon: 0.13 },
+            { name: "Dubai", lat: 25.20, lon: 55.27 },
+            { name: "Singapore", lat: 1.35, lon: 103.82 },
+            { name: "Tokyo", lat: 35.68, lon: 139.76 },
+            { name: "Sydney", lat: -33.87, lon: 151.21 },
+            { name: "Miami", lat: 25.76, lon: -80.19 },
+            { name: "Berlin", lat: 52.52, lon: 13.40 }
+        ];
+
+        /**
+         * Converts latitude and longitude to Cartesian (x, y, z) coordinates on the globe surface.
+         */
+        function latLonToXyz(lat, lon, radius) {
+            // Convert degrees to radians
+            const latRad = lat * (Math.PI / 180);
+            const lonRad = -lon * (Math.PI / 180); // Negative for standard map orientation
+
+            const x = radius * Math.cos(latRad) * Math.cos(lonRad);
+            const y = radius * Math.sin(latRad);
+            const z = radius * Math.cos(latRad) * Math.sin(lonRad);
+            
+            return new THREE.Vector3(x, y, z);
+        }
+
+        function initThreeJS() {
+            const canvas = document.getElementById('bg-canvas');
+            if (!canvas) return; 
+            if (hasInit) { console.warn('[Globe] init already performed, skipping.'); return; }
+            hasInit = true;
+            console.log('[Globe] init start');
+
+            scene = new THREE.Scene();
+
+            const rectInit = canvas.getBoundingClientRect();
+            const width = canvas.clientWidth || rectInit.width || 300;
+            const height = canvas.clientHeight || rectInit.height || 300;
+
+            // Camera Setup: Positioned away to see the whole globe
+            camera = new THREE.PerspectiveCamera(30, width / height, 0.1, 1000);
+            camera.position.set(0, 0, 18); 
+            camera.lookAt(0, 0, 0);
+
+            // Renderer Setup (Transparent background)
+            renderer = new THREE.WebGLRenderer({ canvas: canvas, alpha: true, antialias: true });
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            canvas.addEventListener('webglcontextlost', (e) => {
+                e.preventDefault();
+                console.warn('[Canvas] WebGL context lost');
+                isPaused = true;
+            }, false);
+            canvas.addEventListener('webglcontextrestored', () => {
+                console.log('[Canvas] WebGL context restored');
+                isPaused = isManualPaused;
+                updateGlobeScaleToFit();
+            }, false);
+            
+            // --- Lighting ---
+            const ambientLight = new THREE.AmbientLight(0xffffff, 1.0);
+            scene.add(ambientLight);
+
+            const keyLight = new THREE.DirectionalLight(0xffffff, 5.0);
+            keyLight.position.set(12, 6, 10);
+            keyLight.castShadow = true;
+            keyLight.shadow.bias = 0.01;
+            scene.add(keyLight);
+
+            const fillLight = new THREE.DirectionalLight(0xffffff, 3.0);
+            fillLight.position.set(-12, 4, -8);
+            fillLight.castShadow = true;
+            fillLight.shadow.bias = 0.01;
+            scene.add(fillLight);
+
+            const rimLight = new THREE.DirectionalLight(0xffffff, 2.0);
+            rimLight.position.set(0, -6, 12);
+            rimLight.castShadow = true;
+            rimLight.shadow.bias = 0.01;
+            scene.add(rimLight);
+
+            // --- GLOBE MODEL CONSTRUCTION ---
+            const globeGeometry = new THREE.SphereGeometry(GLOBE_RADIUS, 64, 64);
+            const loader = new THREE.TextureLoader();
+            console.log('[Globe] requesting textures');
+            const dayTex = loader.load(
+                'https://raw.githubusercontent.com/turban/webgl-earth/master/images/2_no_clouds_4k.jpg',
+                (t)=>{ t.encoding = THREE.sRGBEncoding; console.log('[Globe] day texture loaded'); },
+                undefined,
+                (e)=>{ console.error('[Globe] day texture error', e); }
+            );
+            const vertexShader = `
+                varying vec3 vWorldNormal;
+                varying vec2 vUv;
+                void main() {
+                    vUv = uv;
+                    vWorldNormal = normalize(mat3(modelMatrix) * normal);
+                    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+                }
+            `;
+            const fragmentShader = `
+                uniform sampler2D dayTex;
+                uniform vec3 sunDirection;
+                uniform float sss;
+                uniform float aoRadius;
+                varying vec3 vWorldNormal;
+                varying vec2 vUv;
+                void main() {
+                    vec3 N = normalize(vWorldNormal);
+                    vec3 L = normalize(sunDirection);
+                    float ndl = dot(N, L);
+                    float wrap = clamp(0.5 + 0.5 * ndl, 0.0, 1.0);
+                    vec3 dayColor = texture2D(dayTex, vUv).rgb;
+                    float baseIllum = 0.9 + 0.1 * wrap;
+                    float backScatter = (1.0 - wrap) * sss * 0.3;
+                    vec3 color = dayColor * baseIllum + backScatter;
+                    float ao = 1.0 - min(aoRadius * 0.05, 0.1);
+                    color *= ao;
+                    gl_FragColor = vec4(color, 1.0);
+                }
+            `;
+            const sunDir = new THREE.Vector3().add(keyLight.position).add(fillLight.position).add(rimLight.position).normalize();
+            const globeMaterial = new THREE.ShaderMaterial({
+                uniforms: {
+                    dayTex: { value: dayTex },
+                    sunDirection: { value: sunDir },
+                    sss: { value: 0.3 },
+                    aoRadius: { value: 1.0 }
+                },
+                vertexShader,
+                fragmentShader
+            });
+            globeMesh = new THREE.Mesh(globeGeometry, globeMaterial);
+            globeMesh.castShadow = true;
+            globeMesh.receiveShadow = true;
+            globeGroup = new THREE.Group();
+            globeGroup.rotation.z = THREE.MathUtils.degToRad(23.5);
+            globeGroup.add(globeMesh);
+            scene.add(globeGroup);
+            camera.lookAt(globeGroup.position);
+            console.log('[Globe] group ready at', globeGroup.position.toArray());
+            globeGroup.position.x = GROUP_OFFSET_X;
+            
+            // Pins
+            const pinGeometry = new THREE.ConeGeometry(0.1, 0.5, 8);
+            const pinMaterial = new THREE.MeshStandardMaterial({ color: 0xFFD700, metalness: 0.3, roughness: 0.6 });
+            pinHighlightMaterial = new THREE.MeshStandardMaterial({ color: 0xFFFF66, emissive: 0x555500, metalness: 0.3, roughness: 0.5 });
+            
+            cities.forEach(city => {
+                const pos = latLonToXyz(city.lat, city.lon, GLOBE_RADIUS);
+                
+                const pin = new THREE.Mesh(pinGeometry, pinMaterial);
+                
+                // Position the pin slightly outside the globe surface
+                pin.position.copy(pos).multiplyScalar(1.05); 
+                
+                // Orient the pin to point away from the center of the globe
+                pin.lookAt(new THREE.Vector3(0, 0, 0));
+                pin.rotateX(Math.PI / 2); // Cone geometry needs 90 degree rotation to point outward
+                
+                pin.userData.name = city.name;
+                pins.push(pin);
+                globeMesh.add(pin);
+            });
+            
+            globeMesh.rotation.y = Math.PI / 2;
+            tooltipEl = document.createElement('div');
+            tooltipEl.id = 'pin-tooltip';
+            document.body.appendChild(tooltipEl);
+            raycaster = new THREE.Raycaster();
+            mouse = new THREE.Vector2();
+            canvas.addEventListener('pointerdown', onPointerDown);
+            canvas.addEventListener('pointermove', onPointerMove);
+            canvas.addEventListener('pointerup', onPointerUp);
+            canvas.addEventListener('pointerleave', onPointerLeave);
+            canvas.addEventListener('dblclick', onDoubleClick);
+            canvas.addEventListener('click', () => { isManualPaused = !isManualPaused; isPaused = isManualPaused; });
+            canvas.addEventListener('touchstart', onTouchStart, { passive: false });
+            canvas.addEventListener('touchmove', onTouchMove, { passive: false });
+            canvas.addEventListener('touchend', onTouchEnd);
+            clock = new THREE.Clock();
+            updateGlobeScaleToFit();
+            console.log('[Globe] init complete');
+            
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function onWindowResize() {
+            const canvas = document.getElementById('bg-canvas');
+            if (canvas && camera && renderer) {
+                const rect = canvas.getBoundingClientRect();
+                const width = canvas.clientWidth || rect.width || 300;
+                const height = canvas.clientHeight || rect.height || 300;
+
+                camera.aspect = width / height;
+                camera.updateProjectionMatrix();
+                renderer.setSize(width, height);
+                updateGlobeScaleToFit();
+            }
+        }
+
+        let hoveredPin = null;
+        function onPointerMove(e) {
+            const canvas = document.getElementById('bg-canvas');
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            if (dragging) {
+                const ts = performance.now();
+                const dx = e.clientX - lastX;
+                const dy = e.clientY - lastY;
+                const dt = Math.max((ts - lastTs) / 1000, 0.001);
+                const yawDelta = dx * sensitivity;
+                const pitchDelta = dy * sensitivity;
+                globeMesh.rotation.y += yawDelta;
+                globeMesh.rotation.x = Math.min(MAX_PITCH, Math.max(MIN_PITCH, globeMesh.rotation.x + pitchDelta));
+                velY = yawDelta / dt;
+                velX = pitchDelta / dt;
+                lastX = e.clientX;
+                lastY = e.clientY;
+                lastTs = ts;
+            } else {
+                const now = performance.now();
+                if (now - lastRaycastAt > raycastThrottleMs) {
+                    lastRaycastAt = now;
+                    raycaster.setFromCamera(mouse, camera);
+                    const intersects = raycaster.intersectObjects(pins, true);
+                    if (intersects.length > 0) {
+                        const obj = intersects[0].object;
+                        if (hoveredPin && hoveredPin !== obj) hoveredPin.scale.set(1, 1, 1);
+                        hoveredPin = obj;
+                        hoveredPin.scale.set(1.2, 1.2, 1.2);
+                        const name = hoveredPin.userData.name || '';
+                        tooltipEl.textContent = name;
+                        tooltipEl.style.left = `${e.clientX}px`;
+                        tooltipEl.style.top = `${e.clientY}px`;
+                        tooltipEl.style.display = 'block';
+                    } else {
+                        if (hoveredPin) hoveredPin.scale.set(1, 1, 1);
+                        hoveredPin = null;
+                        tooltipEl.style.display = 'none';
+                    }
+                    isPaused = isManualPaused || !!hoveredPin;
+                }
+            }
+        }
+        function onPointerDown(e) {
+            dragging = true;
+            lastX = e.clientX;
+            lastY = e.clientY;
+            lastTs = performance.now();
+            velX = 0; velY = 0;
+            inertiaVX = 0; inertiaVY = 0;
+        }
+        function onPointerUp() {
+            dragging = false;
+            inertiaVX = velX;
+            inertiaVY = velY;
+        }
+        function onPointerLeave() {
+            if (hoveredPin) hoveredPin.scale.set(1, 1, 1);
+            hoveredPin = null;
+            tooltipEl.style.display = 'none';
+            isPaused = isManualPaused;
+        }
+        function onDoubleClick(e) {
+            const canvas = document.getElementById('bg-canvas');
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObjects(pins, true);
+            if (intersects.length > 0) {
+                const pin = intersects[0].object;
+                if (selectedPin && selectedPin !== pin) selectedPin.material = pins[0].material;
+                selectedPin = pin;
+                selectedPin.material = pinHighlightMaterial;
+                const v = selectedPin.position.clone();
+                const yawAdd = -Math.atan2(v.x, v.z);
+                const pitchAdd = -Math.atan2(v.y, Math.sqrt(v.x*v.x + v.z*v.z));
+                flyFromY = globeMesh.rotation.y;
+                flyFromX = globeMesh.rotation.x;
+                flyToY = flyFromY + yawAdd;
+                flyToX = Math.min(MAX_PITCH, Math.max(MIN_PITCH, flyFromX + pitchAdd));
+                camFromZ = camera.position.z;
+                camToZ = 12;
+                isFlying = true;
+                flyStart = performance.now();
+            }
+        }
+        function onTouchStart(e) {
+            if (e.touches.length > 0) {
+                const t = e.touches[0];
+                dragging = true;
+                lastX = t.clientX;
+                lastY = t.clientY;
+                lastTs = performance.now();
+                velX = 0; velY = 0;
+                inertiaVX = 0; inertiaVY = 0;
+            }
+        }
+        function onTouchMove(e) {
+            if (e.touches.length > 0) {
+                e.preventDefault();
+                onPointerMove({ clientX: e.touches[0].clientX, clientY: e.touches[0].clientY });
+            }
+        }
+        function onTouchEnd() {
+            onPointerUp();
+        }
+        function easeOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const delta = clock ? clock.getDelta() : 0;
+            if (isVerifyingCamera) {
+                const t = Math.min((performance.now() - verifyStart) / verifyDuration, 1);
+                const theta = THREE.MathUtils.lerp(0, Math.PI * 0.5, t);
+                camera.position.x = globeGroup.position.x + camOrbitRadius * Math.sin(theta);
+                camera.position.z = globeGroup.position.z + camOrbitRadius * Math.cos(theta);
+                camera.lookAt(globeGroup.position);
+                if (t >= 1) {
+                    camera.position.copy(camOrigPos);
+                    camera.lookAt(globeGroup.position);
+                    isVerifyingCamera = false;
+                }
+            }
+            if (isFlying) {
+                const t = Math.min((performance.now() - flyStart) / flyDuration, 1);
+                const k = easeOutCubic(t);
+                globeMesh.rotation.y = flyFromY + (flyToY - flyFromY) * k;
+                globeMesh.rotation.x = flyFromX + (flyToX - flyFromX) * k;
+                camera.position.z = camFromZ + (camToZ - camFromZ) * k;
+                if (t >= 1) { isFlying = false; }
+            }
+            if (globeMesh && !isPaused && !isFlying) {
+                globeMesh.rotation.y += ANGULAR_SPEED * delta;
+            }
+            if (!isFlying) {
+                if (Math.abs(inertiaVX) > 1e-6 || Math.abs(inertiaVY) > 1e-6) {
+                    globeMesh.rotation.y += inertiaVY * delta;
+                    globeMesh.rotation.x = Math.min(MAX_PITCH, Math.max(MIN_PITCH, globeMesh.rotation.x + inertiaVX * delta));
+                    const decay = Math.exp(-inertiaDamping * delta);
+                    inertiaVX *= decay;
+                    inertiaVY *= decay;
+                }
+            }
+
+            if (renderer && scene && camera) {
+                renderer.render(scene, camera);
+            }
+        }
+
+        function updateGlobeScaleToFit() {
+            if (!camera || !globeGroup) return;
+            const d = camera.position.distanceTo(globeGroup.position);
+            const v = 2 * d * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+            const h = v * camera.aspect;
+            const target = 0.8 * Math.min(v, h);
+            const baseRadius = GLOBE_RADIUS * 1.05 + 0.25;
+            const baseDiameter = 2 * baseRadius;
+            let s = (target / baseDiameter) * SCALE_MULTIPLIER;
+            s = Math.max(s, 0.05);
+            globeGroup.scale.set(s, s, s);
+            ensureInFrustum();
+        }
+
+        function ensureInFrustum() {
+            if (!camera || !globeMesh) return;
+            const frustum = new THREE.Frustum();
+            const m = new THREE.Matrix4();
+            m.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+            frustum.setFromProjectionMatrix(m);
+            const visible = frustum.intersectsObject(globeMesh);
+            if (!visible) {
+                console.warn('[Globe] globe not in frustum; realigning camera');
+                camera.lookAt(globeGroup.position);
+            }
+        }
+
+        function startVerificationOrbit() {
+            if (!camera || !globeGroup) return;
+            camOrigPos = camera.position.clone();
+            camOrbitRadius = camera.position.distanceTo(globeGroup.position);
+            isVerifyingCamera = true;
+            verifyStart = performance.now();
+        }
+
+        // --- SOLANA TREASURY TRACKER (UNCHANGED) ---
+        
+        const TREASURY_ADDRESS = '2n8etcRuK49GUMXWi2QRtQ8YwS6nTDEUjfX7LcvKFyiV';
+        const FUNDRAISING_GOAL = 2000000; // $2M
+        const SOL_MINT = 'So11111111111111111111111111111111111111112';
+        const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+        const TOKEN_2022_PROGRAM_ID = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+        const RPC_ENDPOINTS = [
+            'https://solana-rpc.publicnode.com', 
+            'https://rpc.ankr.com/solana',
+            'https://solana-mainnet.rpc.extrnode.com'
+        ];
+        const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+        const REFRESH_INTERVAL_MS = 30000;
+        let isFetchingTreasury = false;
+        let refreshTimer = null;
+        let lastSolUsd = null;
+
+        function aggregateByMint(tokens) {
+            const agg = {};
+            for (let i = 0; i < tokens.length; i++) {
+                const t = tokens[i];
+                if (!t || !t.mint) continue;
+                const amt = Number(t.amount);
+                if (!Number.isFinite(amt) || amt <= 0) continue;
+                agg[t.mint] = (agg[t.mint] || 0) + amt;
+            }
+            return agg;
+        }
+
+        async function fetchTokenPrices(mints) {
+            const priceMap = {};
+            const ids = Array.from(mints);
+            const chunkSize = 40;
+            
+            // Try v3 API first (no auth required)
+                console.log(`[Treasury] Fetching prices from Jupiter v3 for ${ids.length} tokens...`);
+                for (let i = 0; i < ids.length; i += chunkSize) {
+                    const chunk = ids.slice(i, i + chunkSize);
+                    const url = `https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`;
+                    try {
+                        if (i > 0) await delay(200);
+                        console.log(`[Treasury] Fetching v3 prices for chunk ${i}/${Math.ceil(ids.length/chunkSize)}`);
+                        const res = await retryFetch(url, { method: 'GET' }, 5);
+                        const json = await res.json();
+                        
+                        // Handle v3 format (direct mint -> data mapping)
+                        let foundPrices = 0;
+                        for (const mint of chunk) {
+                            if (json[mint] && json[mint].usdPrice) {
+                                priceMap[mint] = { price: String(json[mint].usdPrice) };
+                                foundPrices++;
+                            }
+                        }
+                        console.log(`[Treasury] Found ${foundPrices}/${chunk.length} prices in v3 chunk ${i}`);
+                    } catch (err) {
+                        console.warn(`[Treasury] V3 price fetch failed for chunk ${i}:`, err.message);
+                    }
+                }
+            
+            // Fallback to v2 for any missing prices
+            const missingMints = ids.filter(mint => !priceMap[mint]);
+            if (missingMints.length > 0) {
+                console.log(`[Treasury] Fetching ${missingMints.length} missing prices from Jupiter v2...`);
+                for (let i = 0; i < missingMints.length; i += chunkSize) {
+                    const chunk = missingMints.slice(i, i + chunkSize);
+                    const url = `https://api.jup.ag/price/v2?ids=${chunk.join(',')}`;
+                    try {
+                        if (i > 0) await delay(200);
+                        console.log(`[Treasury] Fetching v2 prices for chunk ${i}/${Math.ceil(missingMints.length/chunkSize)}`);
+                        const res = await retryFetch(url, { method: 'GET' }, 5);
+                        const json = await res.json();
+                        if (json && json.data) {
+                            let foundPrices = 0;
+                            for (const mint of chunk) {
+                                if (json.data[mint] && json.data[mint].price) {
+                                    foundPrices++;
+                                }
+                            }
+                            console.log(`[Treasury] Found ${foundPrices}/${chunk.length} prices in v2 chunk ${i}`);
+                            Object.assign(priceMap, json.data);
+                        }
+                    } catch (err) {
+                        console.warn(`[Treasury] V2 price fetch failed for chunk ${i}:`, err.message);
+                    }
+                }
+            }
+            
+            const foundPrices = Object.keys(priceMap).length;
+            console.log(`[Treasury] Price fetch complete: ${foundPrices}/${ids.length} tokens priced`);
+            
+            return priceMap;
+        }
+
+        function computeUsdTotal(tokens, priceMap) {
+            const agg = aggregateByMint(tokens);
+            let total = 0;
+            for (const mint of Object.keys(agg)) {
+                const info = priceMap[mint];
+                if (!info || !info.price) continue;
+                const p = parseFloat(info.price);
+                if (!Number.isFinite(p)) continue;
+                total += agg[mint] * p;
+            }
+            return total;
+        }
+
+        async function fetchSolUsdPriceReliable() {
+            try {
+                console.log(`[Treasury] Fetching SOL price from Jupiter v2...`);
+                const u1 = `https://api.jup.ag/price/v2?ids=${SOL_MINT}`;
+                const r1 = await retryFetch(u1, { method: 'GET' }, 5);
+                const j1 = await r1.json();
+                const p1 = j1 && j1.data && j1.data[SOL_MINT] && parseFloat(j1.data[SOL_MINT].price);
+                if (Number.isFinite(p1)) {
+                    console.log(`[Treasury] SOL price from v2: $${p1}`);
+                    return p1;
+                }
+                console.warn(`[Treasury] Invalid SOL price from v2:`, j1);
+            } catch (err) {
+                console.warn(`[Treasury] Jupiter v2 SOL price fetch failed:`, err.message);
+            }
+            
+            try {
+                console.log(`[Treasury] Fetching SOL price from Jupiter v3...`);
+                const u2 = `https://lite-api.jup.ag/price/v3?ids=${SOL_MINT}`;
+                const r2 = await retryFetch(u2, { method: 'GET' }, 5);
+                const j2 = await r2.json();
+                const p2 = j2 && j2[SOL_MINT] && parseFloat(j2[SOL_MINT].usdPrice);
+                if (Number.isFinite(p2)) {
+                    console.log(`[Treasury] SOL price from v3: $${p2}`);
+                    return p2;
+                }
+                console.warn(`[Treasury] Invalid SOL price from v3:`, j2);
+            } catch (err) {
+                console.warn(`[Treasury] Jupiter v3 SOL price fetch failed:`, err.message);
+            }
+            
+            console.error(`[Treasury] All SOL price sources failed`);
+            throw new Error('SOL price unavailable');
+        }
+
+        async function fetchLamportsPerSignature(connection) {
+            try {
+                const info = await connection.getRecentBlockhash();
+                const v = info && info.feeCalculator && info.feeCalculator.lamportsPerSignature;
+                if (typeof v === 'number' && v > 0) return v;
+            } catch (_) {}
+            return 5000;
+        }
+
+        async function fetchTreasuryData() {
+            const valueEl = document.getElementById('treasury-value');
+            const percentEl = document.getElementById('treasury-percent');
+            const barEl = document.getElementById('progress-bar');
+            const statusEl = document.getElementById('treasury-status');
+            const iconEl = document.getElementById('treasury-indicator-icon');
+            const updatedEl = document.getElementById('treasury-updated');
+
+            if (isFetchingTreasury) return;
+            
+            try {
+                isFetchingTreasury = true;
+                console.log(`[Treasury] Starting balance fetch for ${TREASURY_ADDRESS}`);
+
+                // Add pulse animation and loading state
+                const valueEl = document.getElementById('treasury-value');
+                const barEl = document.getElementById('progress-bar');
+                const iconEl = document.getElementById('treasury-indicator-icon');
+                
+                if (valueEl) valueEl.classList.add('animate-pulse');
+                if (barEl) barEl.classList.add('animate-pulse');
+                if (iconEl) {
+                    iconEl.classList.remove('text-green-500', 'text-red-500');
+                    iconEl.classList.add('text-yellow-500');
+                }
+
+            let connection = null;
+            let solBalanceLamports = null;
+            let tokenAccountsLegacy = null;
+            let tokenAccounts2022 = null;
+
+            updateTreasuryComponents(valueEl.textContent, percentEl.textContent, "Connecting to Blockchain...", false);
+
+            for (const endpoint of RPC_ENDPOINTS) {
+                try {
+                    console.log(`[Treasury] Attempting connection to ${endpoint}`);
+                    connection = new solanaWeb3.Connection(endpoint);
+                    let pubKey = null;
+                    try { pubKey = new solanaWeb3.PublicKey(TREASURY_ADDRESS); } catch (err) { 
+                        console.error(`[Treasury] Invalid treasury address: ${err.message}`);
+                        pubKey = null; 
+                    }
+                    if (!pubKey) {
+                        console.error(`[Treasury] PublicKey creation failed for address: ${TREASURY_ADDRESS}`);
+                        throw new Error('Invalid treasury address format');
+                    }
+                    
+                    console.log(`[Treasury] Fetching balance for ${TREASURY_ADDRESS}`);
+                    solBalanceLamports = await connection.getBalance(pubKey);
+                    console.log(`[Treasury] Raw balance: ${solBalanceLamports} lamports`);
+                    
+                    updateTreasuryComponents(valueEl.textContent, percentEl.textContent, "Fetching Token Accounts (Legacy & 2022)...", false);
+                    
+                    const legacyReq = connection.getParsedTokenAccountsByOwner(pubKey, {
+                        programId: new solanaWeb3.PublicKey(TOKEN_PROGRAM_ID)
+                    });
+                    const token2022Req = connection.getParsedTokenAccountsByOwner(pubKey, {
+                        programId: new solanaWeb3.PublicKey(TOKEN_2022_PROGRAM_ID)
+                    });
+                    
+                    [tokenAccountsLegacy, tokenAccounts2022] = await Promise.all([legacyReq, token2022Req]);
+                    console.log(`[Treasury] Success with ${endpoint}`);
+                    console.log(`[Treasury] Legacy tokens: ${tokenAccountsLegacy.value.length}, Token-2022: ${tokenAccounts2022.value.length}`);
+                    break; 
+                } catch (err) {
+                    console.warn(`[Treasury] Failed to connect/fetch from ${endpoint}:`, err);
+                    connection = null; 
+                }
+            }
+
+            if (!connection || solBalanceLamports === null) {
+                console.error("[Treasury] All RPC endpoints failed.");
+                updateTreasuryComponents('$450,000*', '22.5%*', 'Connection Limited', true);
+                isFetchingTreasury = false;
+                return;
+            }
+
+            try {
+                console.log(`[Treasury] Processing balance data...`);
+                
+                const feeLamports = await fetchLamportsPerSignature(connection);
+                console.log(`[Treasury] Network fee: ${feeLamports} lamports`);
+                
+                const lamportsNet = Math.max(0, solBalanceLamports - feeLamports);
+                console.log(`[Treasury] Net balance (after fee): ${lamportsNet} lamports`);
+                
+                const solBalance = lamportsNet / (solanaWeb3 && solanaWeb3.LAMPORTS_PER_SOL ? solanaWeb3.LAMPORTS_PER_SOL : 1e9);
+                console.log(`[Treasury] SOL balance: ${solBalance} SOL`);
+                
+                let tokens = [];
+                tokens.push({ mint: SOL_MINT, amount: solBalance });
+                
+                const processAccounts = (accounts, type) => {
+                    if (accounts && accounts.value) {
+                        console.log(`[Treasury] Processing ${type} accounts: ${accounts.value.length} found`);
+                        for (let k = 0; k < accounts.value.length; k++) {
+                            const parsedInfo = accounts.value[k].account.data.parsed.info;
+                            const amtInfo = parsedInfo.tokenAmount;
+                            const amount = amtInfo.uiAmount !== null ? amtInfo.uiAmount : parseFloat(amtInfo.uiAmountString);
+                            const mint = parsedInfo.mint;
+                            if (amount !== null && amount > 0 && mint) {
+                                tokens.push({ mint, amount });
+                                console.log(`[Treasury] Found token: ${mint} = ${amount}`);
+                            }
+                        }
+                    }
+                };
+                
+                processAccounts(tokenAccountsLegacy, 'Legacy');
+                processAccounts(tokenAccounts2022, 'Token-2022');
+                
+                const agg = aggregateByMint(tokens);
+                console.log(`[Treasury] Aggregated tokens:`, agg);
+                
+                const uniqueMints = new Set(Object.keys(agg));
+                console.log(`[Treasury] Unique mints to price: ${Array.from(uniqueMints).join(', ')}`);
+                
+                updateTreasuryComponents(valueEl.textContent, percentEl.textContent, `Pricing ${uniqueMints.size} Assets...`, false);
+                
+                let priceMap = await fetchTokenPrices(uniqueMints);
+                console.log(`[Treasury] Price map:`, priceMap);
+                
+                if (!priceMap[SOL_MINT]) {
+                    try {
+                        console.log(`[Treasury] SOL price missing, fetching reliable price...`);
+                        const solUsd = await fetchSolUsdPriceReliable();
+                        priceMap[SOL_MINT] = { price: String(solUsd) };
+                        console.log(`[Treasury] SOL price fetched: $${solUsd}`);
+                    } catch (err) {
+                        console.error(`[Treasury] Failed to fetch SOL price:`, err);
+                    }
+                }
+                
+                let totalUsdValue = 0;
+                console.log(`[Treasury] Calculating total USD value...`);
+                
+                for (const mint of Object.keys(agg)) {
+                    const info = priceMap[mint];
+                    if (!info || !info.price) {
+                        console.warn(`[Treasury] No price for mint ${mint}`);
+                        continue;
+                    }
+                    const p = parseFloat(info.price);
+                    if (!Number.isFinite(p)) {
+                        console.warn(`[Treasury] Invalid price for mint ${mint}: ${info.price}`);
+                        continue;
+                    }
+                    const mintValue = agg[mint] * p;
+                    totalUsdValue += mintValue;
+                    console.log(`[Treasury] ${mint}: ${agg[mint]} * $${p} = $${mintValue}`);
+                }
+                
+                console.log(`[Treasury] Total USD value: $${totalUsdValue}`);
+                
+                const formattedValue = new Intl.NumberFormat('en-US', {
+                    style: 'currency',
+                    currency: 'USD',
+                    maximumFractionDigits: 0
+                }).format(totalUsdValue);
+                
+                const percent = Math.min((totalUsdValue / FUNDRAISING_GOAL) * 100, 100).toFixed(1);
+                console.log(`[Treasury] Progress: ${percent}% of $${FUNDRAISING_GOAL.toLocaleString()} goal`);
+
+                updateTreasuryComponents(formattedValue, `${percent}%`, 'Live Progress', false);
+                isFetchingTreasury = false;
+
+            } catch (error) {
+                console.error("[Treasury] Error processing treasury data:", error);
+                updateTreasuryComponents('$450,000*', '22.5%*', 'Connection Limited', true);
+                isFetchingTreasury = false;
+            }
+            } catch (error) {
+                console.error(`[Treasury] Critical error in fetchTreasuryData:`, error);
+                updateTreasuryComponents('$450,000*', '22.5%*', 'Connection Limited', true);
+                isFetchingTreasury = false;
+            }
+        }
+
+        function displayFallbackData(valueEl, percentEl, barEl, statusEl) {
+            console.warn(`[Treasury] Displaying fallback data due to connection issues`);
+            statusEl.textContent = 'Connection Limited';
+            valueEl.textContent = '$450,000*'; // Fallback
+            percentEl.textContent = '22.5%*'; // Fallback
+            barEl.style.width = '22.5%';
+            
+            if (!valueEl.parentNode.querySelector('.fallback-note')) {
+                const note = document.createElement('div');
+                note.className = "text-[10px] text-red-400 mt-1 absolute fallback-note";
+                note.innerText = "*Using cached data (RPC limit)";
+                valueEl.parentElement.appendChild(note);
+            }
+            const iconEl = document.getElementById('treasury-indicator-icon');
+            const updatedEl = document.getElementById('treasury-updated');
+            if (iconEl) {
+                iconEl.classList.remove('text-yellow-500', 'text-green-500');
+                iconEl.classList.add('text-red-500');
+            }
+            if (updatedEl) updatedEl.textContent = 'Updated: Fallback';
+        }
+
+        function updateTreasuryComponents(value, percent, status, isError = false) {
+            const valueEl = document.getElementById('treasury-value');
+            const percentEl = document.getElementById('treasury-percent');
+            const barEl = document.getElementById('progress-bar');
+            const statusEl = document.getElementById('treasury-status');
+            const iconEl = document.getElementById('treasury-indicator-icon');
+            const updatedEl = document.getElementById('treasury-updated');
+            
+            // New Elements in the card
+            const cardValueEl = document.getElementById('card-treasury-value');
+            const cardPercentEl = document.getElementById('card-treasury-percent');
+            
+            if (!valueEl || !percentEl || !barEl || !statusEl) {
+                console.error('[Treasury] Required elements not found for update');
+                return;
+            }
+            
+            try {
+                // Update value with validation
+                if (typeof value === 'string' && value.length > 0) {
+                    valueEl.textContent = value;
+                    if (cardValueEl) cardValueEl.textContent = value;
+                } else {
+                    console.warn('[Treasury] Invalid value provided:', value);
+                }
+                
+                // Update percentage with validation
+                if (typeof percent === 'string' && percent.length > 0) {
+                    percentEl.textContent = percent;
+                    if (cardPercentEl) cardPercentEl.textContent = percent;
+                } else {
+                    console.warn('[Treasury] Invalid percentage provided:', percent);
+                }
+                
+                // Update progress bar with validation
+                const percentNum = parseFloat(percent.replace('%', ''));
+                if (!isNaN(percentNum) && percentNum >= 0 && percentNum <= 100) {
+                    barEl.style.width = `${percentNum}%`;
+                    barEl.setAttribute('aria-valuenow', percentNum);
+                    barEl.setAttribute('aria-valuetext', `${percentNum}% Funded`);
+                } else {
+                    console.warn('[Treasury] Invalid progress bar percentage:', percent);
+                    barEl.style.width = '0%';
+                    barEl.setAttribute('aria-valuenow', '0');
+                }
+                
+                // Update status
+                if (typeof status === 'string' && status.length > 0) {
+                    statusEl.textContent = status;
+                }
+                
+                // Update icon if available
+                if (iconEl) {
+                    iconEl.classList.remove('text-green-500', 'text-red-500', 'text-yellow-500');
+                    if (isError) {
+                        iconEl.classList.add('text-red-500');
+                    } else {
+                        iconEl.classList.add('text-green-500');
+                    }
+                }
+                
+                // Update timestamp
+                if (updatedEl) {
+                    updatedEl.textContent = `Updated: ${new Date().toLocaleTimeString()}`;
+                }
+                
+                // Handle fallback note for connection issues
+                if (isError && value.includes('*')) {
+                    if (!valueEl.parentNode.querySelector('.fallback-note')) {
+                        const note = document.createElement('div');
+                        note.className = "text-[10px] text-red-400 mt-1 absolute fallback-note";
+                        note.innerText = "*Using cached data (RPC limit)";
+                        valueEl.parentElement.appendChild(note);
+                    }
+                } else {
+                    // Remove fallback note if it exists and we're not in error state
+                    const existingNote = valueEl.parentNode.querySelector('.fallback-note');
+                    if (existingNote) {
+                        existingNote.remove();
+                    }
+                    
+                    // Cache successful data
+                    if (!isError && !value.includes('*')) {
+                        localStorage.setItem('treasuryData', JSON.stringify({
+                            value,
+                            percent,
+                            timestamp: Date.now()
+                        }));
+                    }
+                }
+                
+                // Remove pulse animation
+                valueEl.classList.remove('animate-pulse');
+                barEl.classList.remove('animate-pulse');
+                
+                console.log(`[Treasury] Components updated: ${value}, ${percent}, ${status}`);
+                
+            } catch (error) {
+                console.error('[Treasury] Error updating components:', error);
+            }
+        }
+
+        function startTreasuryTracker() {
+            console.log(`[Treasury] Starting tracker with ${REFRESH_INTERVAL_MS}ms refresh interval`);
+            
+            // Load cache first
+            try {
+                const cached = localStorage.getItem('treasuryData');
+                if (cached) {
+                    const { value, percent, timestamp } = JSON.parse(cached);
+                    const age = (Date.now() - timestamp) / 1000;
+                    if (age < 3600) { // Valid for 1 hour
+                        console.log(`[Treasury] Loading cached data (${age.toFixed(0)}s old)`);
+                        updateTreasuryComponents(value, percent, 'Live Progress', false);
+                    }
+                } else {
+                    // Initialize with empty state to ensure bar is ready
+                    updateTreasuryComponents('$0', '0%', 'Scanning Treasury...', false);
+                }
+            } catch (e) {
+                console.warn('[Treasury] Cache load failed:', e);
+            }
+
+            fetchTreasuryData();
+            if (refreshTimer) {
+                console.log(`[Treasury] Clearing existing refresh timer`);
+                clearInterval(refreshTimer);
+            }
+            refreshTimer = setInterval(() => {
+                console.log(`[Treasury] Scheduled refresh triggered`);
+                fetchTreasuryData();
+            }, REFRESH_INTERVAL_MS);
+            console.log(`[Treasury] Refresh timer started`);
+        }
+
+        function runTreasuryTests() {
+            const s1Tokens = [{ mint: SOL_MINT, amount: 0 }];
+            const s1Prices = { [SOL_MINT]: { price: '100' } };
+            const s1Total = computeUsdTotal(s1Tokens, s1Prices);
+            const s1Percent = Math.min((s1Total / FUNDRAISING_GOAL) * 100, 100).toFixed(1);
+            console.log('[TreasuryTest] Zero treasury', s1Total, s1Percent);
+
+            const s2Tokens = [{ mint: SOL_MINT, amount: 1000 }];
+            const s2Prices = { [SOL_MINT]: { price: '100' } };
+            const s2Total = computeUsdTotal(s2Tokens, s2Prices);
+            const s2Percent = Math.min((s2Total / FUNDRAISING_GOAL) * 100, 100).toFixed(1);
+            console.log('[TreasuryTest] 1000 SOL @ $100', s2Total, s2Percent);
+
+            const s3Tokens = [{ mint: SOL_MINT, amount: 20000 }];
+            const s3Prices = { [SOL_MINT]: { price: '100' } };
+            const s3Total = computeUsdTotal(s3Tokens, s3Prices);
+            const s3Percent = Math.min((s3Total / FUNDRAISING_GOAL) * 100, 100).toFixed(1);
+            console.log('[TreasuryTest] Goal met clamp', s3Total, s3Percent);
+
+            const s4Tokens = [{ mint: SOL_MINT, amount: 1000 }];
+            const s4Prices = { [SOL_MINT]: { price: '80' } };
+            const s4Total = computeUsdTotal(s4Tokens, s4Prices);
+            console.log('[TreasuryTest] 1000 SOL @ $80', s4Total);
+
+            const s5Tokens = [{ mint: SOL_MINT, amount: 1000 }];
+            const s5Prices = { [SOL_MINT]: { price: '120' } };
+            const s5Total = computeUsdTotal(s5Tokens, s5Prices);
+            console.log('[TreasuryTest] 1000 SOL @ $120', s5Total);
+
+            const s6Tokens = [{ mint: SOL_MINT, amount: 0.000001 }];
+            const s6Prices = { [SOL_MINT]: { price: '100' } };
+            const s6Total = computeUsdTotal(s6Tokens, s6Prices);
+            console.log('[TreasuryTest] Dust SOL', s6Total);
+        }
+
+        // --- DEPOSIT FUNCTIONALITY ---
+        let currentDepositToken = 'SOL';
+        let userWalletPublicKey = null;
+        
+        // Constants for Deposit
+        const USDC_MINT_ADDR = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'; 
+        
+        function selectDepositToken(token) {
+            currentDepositToken = token;
+            const solBtn = document.getElementById('btn-select-sol');
+            const usdcBtn = document.getElementById('btn-select-usdc');
+            const ticker = document.getElementById('input-ticker');
+            
+            if (token === 'SOL') {
+                solBtn.className = "py-2 rounded-md text-sm font-semibold bg-white shadow-sm text-black transition-all";
+                usdcBtn.className = "py-2 rounded-md text-sm font-semibold text-slate-500 hover:text-black transition-all";
+                ticker.textContent = 'SOL';
+            } else {
+                usdcBtn.className = "py-2 rounded-md text-sm font-semibold bg-white shadow-sm text-black transition-all";
+                solBtn.className = "py-2 rounded-md text-sm font-semibold text-slate-500 hover:text-black transition-all";
+                ticker.textContent = 'USDC';
+            }
+            updateUserBalanceDisplay();
+        }
+        
+        async function updateUserBalanceDisplay() {
+            const balEl = document.getElementById('user-balance');
+            if (!userWalletPublicKey) {
+                balEl.textContent = 'Balance: --';
+                return;
+            }
+            
+            try {
+                const connection = new solanaWeb3.Connection(RPC_ENDPOINTS[0]);
+                if (currentDepositToken === 'SOL') {
+                    const bal = await connection.getBalance(userWalletPublicKey);
+                    balEl.textContent = `Balance: ${(bal / 1e9).toFixed(4)} SOL`;
+                } else {
+                    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(userWalletPublicKey, {
+                        mint: new solanaWeb3.PublicKey(USDC_MINT_ADDR)
+                    });
+                    if (tokenAccounts.value.length > 0) {
+                        const amt = tokenAccounts.value[0].account.data.parsed.info.tokenAmount.uiAmount;
+                        balEl.textContent = `Balance: ${amt.toFixed(2)} USDC`;
+                    } else {
+                        balEl.textContent = `Balance: 0.00 USDC`;
+                    }
+                }
+            } catch (e) {
+                console.error("Balance fetch error:", e);
+                balEl.textContent = 'Balance: Error';
+            }
+        }
+        
+        // --- WALLET CONNECTION LOGIC ---
+        
+        async function handleNavWalletAction() {
+            const navBtn = document.getElementById('nav-wallet-btn');
+            
+            if (!userWalletPublicKey) {
+                // Connect Logic
+                if ('solana' in window) {
+                    try {
+                        navBtn.textContent = "Connecting...";
+                        const resp = await window.solana.connect();
+                        userWalletPublicKey = resp.publicKey;
+                        updateWalletUI(true);
+                        
+                        // Sync with deposit section if visible
+                        updateUserBalanceDisplay();
+                        
+                    } catch (err) {
+                        console.error("Wallet connection failed:", err);
+                        navBtn.textContent = "Connect Wallet";
+                        alert("Connection failed: " + err.message);
+                    }
+                } else {
+                    alert("Phantom wallet not found! Please install Phantom.");
+                    window.open("https://phantom.app/", "_blank");
+                }
+            } else {
+                // Disconnect Logic
+                try {
+                    await window.solana.disconnect();
+                    userWalletPublicKey = null;
+                    updateWalletUI(false);
+                    
+                    // Reset deposit section
+                    const balEl = document.getElementById('user-balance');
+                    if (balEl) balEl.textContent = 'Balance: --';
+                    
+                } catch (err) {
+                    console.error("Disconnect failed:", err);
+                }
+            }
+        }
+
+        function updateWalletUI(isConnected) {
+            const navBtn = document.getElementById('nav-wallet-btn');
+            const depositBtn = document.getElementById('btn-connect-wallet');
+            const statusDot = document.getElementById('wallet-dot');
+            const addressDisplay = document.getElementById('wallet-address-display');
+            
+            if (isConnected && userWalletPublicKey) {
+                const shortAddr = userWalletPublicKey.toString().slice(0, 4) + '...' + userWalletPublicKey.toString().slice(-4);
+                
+                // Update Nav Button
+                if (navBtn) {
+                    navBtn.textContent = shortAddr;
+                    navBtn.classList.add('bg-slate-800'); 
+                    // Add hover effect to show "Disconnect" text
+                    navBtn.onmouseover = () => { navBtn.textContent = "Disconnect"; };
+                    navBtn.onmouseout = () => { navBtn.textContent = shortAddr; };
+                }
+
+                // Update Deposit Section
+                if (depositBtn) {
+                    depositBtn.textContent = "Deposit";
+                }
+                if (statusDot) {
+                    statusDot.classList.remove('bg-slate-300');
+                    statusDot.classList.add('bg-green-500');
+                }
+                if (addressDisplay) {
+                    addressDisplay.textContent = shortAddr;
+                }
+            } else {
+                // Reset Nav Button
+                if (navBtn) {
+                    navBtn.textContent = "Connect Wallet";
+                    navBtn.classList.remove('bg-slate-800');
+                    navBtn.onmouseover = null;
+                    navBtn.onmouseout = null;
+                }
+
+                // Reset Deposit Section
+                if (depositBtn) {
+                    depositBtn.textContent = "Connect Wallet";
+                }
+                if (statusDot) {
+                    statusDot.classList.remove('bg-green-500');
+                    statusDot.classList.add('bg-slate-300');
+                }
+                if (addressDisplay) {
+                    addressDisplay.textContent = "Not Connected";
+                }
+            }
+        }
+
+        // Update handleWalletAction to use the shared logic
+        async function handleWalletAction() {
+            if (!userWalletPublicKey) {
+                await handleNavWalletAction();
+            } else {
+                // If already connected, this button acts as "Deposit" trigger
+                handleDeposit();
+            }
+        }
+        
+        // Auto-connect on load if previously connected
+        window.addEventListener('load', async () => {
+            if ('solana' in window && window.solana.isPhantom) {
+                try {
+                    // Only auto-connect if trusted
+                    const resp = await window.solana.connect({ onlyIfTrusted: true });
+                    userWalletPublicKey = resp.publicKey;
+                    updateWalletUI(true);
+                    updateUserBalanceDisplay();
+                } catch (e) {
+                    // Not trusted or not connected, ignore
+                }
+            }
+        });
+
+        
+        async function handleDeposit() {
+            const amtInput = document.getElementById('deposit-amount');
+            const amount = parseFloat(amtInput.value);
+            const msgEl = document.getElementById('deposit-message');
+            const btn = document.getElementById('btn-connect-wallet');
+            
+            if (!amount || amount <= 0) {
+                alert("Please enter a valid amount.");
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = "Processing...";
+            msgEl.textContent = "Confirming transaction...";
+            msgEl.className = "p-3 rounded-lg text-sm text-center mt-2 bg-blue-50 text-blue-600 block";
+            
+            try {
+                const connection = new solanaWeb3.Connection(RPC_ENDPOINTS[0]);
+                const transaction = new solanaWeb3.Transaction();
+                const recipient = new solanaWeb3.PublicKey(TREASURY_ADDRESS);
+                
+                if (currentDepositToken === 'SOL') {
+                    const lamports = Math.floor(amount * 1e9);
+                    transaction.add(
+                        solanaWeb3.SystemProgram.transfer({
+                            fromPubkey: userWalletPublicKey,
+                            toPubkey: recipient,
+                            lamports: lamports
+                        })
+                    );
+                } else {
+                    // USDC Deposit Logic (Manual SPL Implementation)
+                    const TOKEN_PROGRAM_ID = new solanaWeb3.PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+                    const ASSOCIATED_TOKEN_PROGRAM_ID = new solanaWeb3.PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+                    const usdcMint = new solanaWeb3.PublicKey(USDC_MINT_ADDR);
+                    
+                    // Helper: Find ATA
+                    const getATA = async (owner) => {
+                        return (await solanaWeb3.PublicKey.findProgramAddress(
+                            [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), usdcMint.toBuffer()],
+                            ASSOCIATED_TOKEN_PROGRAM_ID
+                        ))[0];
+                    };
+
+                    const userATA = await getATA(userWalletPublicKey);
+                    const treasuryATA = await getATA(recipient);
+                    
+                    // Check if treasury ATA exists
+                    const treasuryAccountInfo = await connection.getAccountInfo(treasuryATA);
+                    
+                    if (!treasuryAccountInfo) {
+                        // Create ATA Instruction
+                        const createATAInstr = new solanaWeb3.TransactionInstruction({
+                            keys: [
+                                { pubkey: userWalletPublicKey, isSigner: true, isWritable: true },
+                                { pubkey: treasuryATA, isSigner: false, isWritable: true },
+                                { pubkey: recipient, isSigner: false, isWritable: false },
+                                { pubkey: usdcMint, isSigner: false, isWritable: false },
+                                { pubkey: solanaWeb3.SystemProgram.programId, isSigner: false, isWritable: false },
+                                { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+                            ],
+                            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+                            data: new Uint8Array(0)
+                        });
+                        transaction.add(createATAInstr);
+                    }
+                    
+                    // Create Transfer Instruction
+                    const decimals = 6;
+                    const rawAmount = BigInt(Math.floor(amount * Math.pow(10, decimals)));
+                    const data = new Uint8Array(9);
+                    data[0] = 3; // Transfer
+                    for (let i = 0; i < 8; i++) {
+                        data[i + 1] = Number((rawAmount >> (BigInt(i) * 8n)) & 0xFFn);
+                    }
+                    
+                    const transferInstr = new solanaWeb3.TransactionInstruction({
+                        keys: [
+                            { pubkey: userATA, isSigner: false, isWritable: true },
+                            { pubkey: treasuryATA, isSigner: false, isWritable: true },
+                            { pubkey: userWalletPublicKey, isSigner: true, isWritable: false }
+                        ],
+                        programId: TOKEN_PROGRAM_ID,
+                        data: data
+                    });
+                    
+                    transaction.add(transferInstr);
+                }
+                
+                transaction.feePayer = userWalletPublicKey;
+                const { blockhash } = await connection.getLatestBlockhash();
+                transaction.recentBlockhash = blockhash;
+                
+                const { signature } = await window.solana.signAndSendTransaction(transaction);
+                
+                msgEl.innerHTML = `Transaction Sent! <a href="https://solscan.io/tx/${signature}" target="_blank" class="underline font-bold">View on Solscan</a>`;
+                msgEl.className = "p-3 rounded-lg text-sm text-center mt-2 bg-green-50 text-green-600 block";
+                btn.textContent = "Deposit Again";
+                amtInput.value = "";
+                
+                setTimeout(fetchTreasuryData, 5000);
+                updateUserBalanceDisplay();
+                
+            } catch (err) {
+                console.error("Deposit failed:", err);
+                msgEl.textContent = "Failed: " + err.message;
+                msgEl.className = "p-3 rounded-lg text-sm text-center mt-2 bg-red-50 text-red-600 block";
+                btn.textContent = "Deposit";
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // Run all initialization on window load
+        window.addEventListener('load', () => {
+            initThreeJS();
+            if (renderer) {
+                animate();
+            }
+            startTreasuryTracker();
+            setTimeout(startVerificationOrbit, 800);
+            runTreasuryTests();
+        });
+
+    </script>
+</body>
+</html>
