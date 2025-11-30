@@ -528,9 +528,66 @@
                     to { opacity: 1; transform: translateY(0); }
                 }
                 .mint-image-container { display: flex; align-items: center; justify-content: center; }
-                .mint-illustration { max-width: 100%; height: auto; object-fit: contain; border-radius: 1rem; box-shadow: 0 10px 20px rgba(0,0,0,0.06); }
+                .mint-illustration 
                 @media (max-width: 640px) { .mint-illustration { margin: 0.5rem 0; } }
                 @media (min-width: 768px) { .mint-illustration { max-width: 72%; } }
+                
+                /* Reveal Effect Styles */
+                .reveal-wrapper {
+                    position: relative;
+                    cursor: pointer;
+                    overflow: hidden;
+                    border-radius: 1rem;
+                    transform: translateZ(0); /* Hardware acceleration */
+                }
+                .reveal-wrapper:focus {
+                    outline: 2px solid #3b82f6;
+                    outline-offset: 4px;
+                }
+                .reveal-overlay {
+                    position: absolute;
+                    inset: 0;
+                    background: rgba(192, 192, 192, 0.7); /* Semi-transparent silver */
+                    z-index: 10;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    transition: opacity 0.8s ease-out, transform 0.5s ease;
+                }
+                .reveal-content {
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    gap: 0.5rem;
+                    animation: pulse 2s infinite;
+                }
+                .reveal-image {
+                    clip-path: circle(0% at 50% 50%);
+                    transition: clip-path 1.5s cubic-bezier(0.4, 0, 0.2, 1), filter 1s ease;
+                    filter: grayscale(100%) blur(5px);
+                }
+                .reveal-wrapper.revealed .reveal-image {
+                    clip-path: circle(150% at 50% 50%);
+                    filter: grayscale(0%) blur(0);
+                }
+                .reveal-wrapper.revealed .reveal-overlay {
+                    opacity: 0;
+                    pointer-events: none;
+                    transform: scale(1.1);
+                }
+                @keyframes pulse {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.7; transform: scale(0.95); }
+                }
+                @media (prefers-reduced-motion: reduce) {
+                    .reveal-image, .reveal-overlay {
+                        transition: none !important;
+                        animation: none !important;
+                    }
+                    .reveal-wrapper.revealed .reveal-image {
+                        clip-path: none;
+                    }
+                }
             </style>
             <div class="flex flex-col items-center gap-[15px]">
                 <div class="genesis-title">Mint ARX Genesis Keycard</div>
@@ -540,10 +597,45 @@
             <div id="mint-counter"></div>
         </div>
         <div class="max-w-7xl mx-auto px-6 mt-8">
-            <figure class="mint-image-container">
-                <img src="assets/images/mint-illustration.png">
+            <figure class="mint-image-container reveal-wrapper" id="reveal-trigger" role="button" aria-label="Click to reveal illustration" tabindex="0">
+                <div class="reveal-overlay">
+                    <div class="reveal-content">
+                        <i data-lucide="sparkles" class="w-8 h-8 text-white mb-2"></i>
+                        <span class="text-white font-bold tracking-widest uppercase text-sm">Click to Reveal</span>
+                    </div>
+                </div>
+                <img src="assets/images/mint-illustration.png" alt="ARX Genesis Keycard Illustration" class="mint-illustration reveal-image">
             </figure>
         </div>
+        <script>
+            document.addEventListener('DOMContentLoaded', () => {
+                const revealTrigger = document.getElementById('reveal-trigger');
+                
+                if (revealTrigger) {
+                    const triggerReveal = () => {
+                        if (!revealTrigger.classList.contains('revealed')) {
+                            // Use requestAnimationFrame for smoother start
+                            requestAnimationFrame(() => {
+                                revealTrigger.classList.add('revealed');
+                                // Update aria-label
+                                revealTrigger.setAttribute('aria-label', 'ARX Genesis Keycard Illustration Revealed');
+                            });
+                        }
+                    };
+
+                    // Click event
+                    revealTrigger.addEventListener('click', triggerReveal);
+
+                    // Keyboard accessibility (Enter or Space)
+                    revealTrigger.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            triggerReveal();
+                        }
+                    });
+                }
+            });
+        </script>
         </section>
 
         <section id="roadmap" class="py-20">
