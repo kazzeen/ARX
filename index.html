@@ -172,6 +172,23 @@
                 word-break: break-word;
             }
         }
+        @media (max-width: 640px) {
+            .hero-text {
+                font-size: clamp(1.6rem, 10vw, 3rem) !important;
+                line-height: 1.15;
+                word-break: break-word;
+                overflow-wrap: anywhere;
+            }
+        }
+        @media (max-width: 480px) {
+            .hero-text { font-size: clamp(1.5rem, 11vw, 2.6rem) !important; line-height: 1.15; }
+        }
+        @media (max-width: 360px) {
+            .hero-text { font-size: clamp(1.4rem, 12vw, 2.4rem) !important; }
+        }
+        @media (orientation: landscape) and (max-height: 420px) {
+            .hero-text { font-size: clamp(1.25rem, 6.5vw, 2.2rem) !important; }
+        }
         @media (max-width: 414px) {
             .hero-text .serif-italic { font-size: clamp(1.6rem, 11.5vw, 2.8rem) !important; }
         }
@@ -510,6 +527,10 @@
                     from { opacity: 0; transform: translateY(20px); }
                     to { opacity: 1; transform: translateY(0); }
                 }
+                .mint-image-container { display: flex; align-items: center; justify-content: center; }
+                .mint-illustration { max-width: 100%; height: auto; object-fit: contain; border-radius: 1rem; box-shadow: 0 10px 20px rgba(0,0,0,0.06); }
+                @media (max-width: 640px) { .mint-illustration { margin: 0.5rem 0; } }
+                @media (min-width: 768px) { .mint-illustration { max-width: 72%; } }
             </style>
             <div class="flex flex-col items-center gap-[15px]">
                 <div class="genesis-title">Mint ARX Genesis Keycard</div>
@@ -517,6 +538,11 @@
             </div>
             <div class="text-xl font-semibold text-slate-700 mt-4">0.1 SOL Mint Price</div>
             <div id="mint-counter"></div>
+        </div>
+        <div class="max-w-7xl mx-auto px-6 mt-8">
+            <figure class="mint-image-container">
+                <img src="assets/images/mint-illustration.png">
+            </figure>
         </div>
         </section>
 
