@@ -159,6 +159,28 @@
             font-weight: 400;
         }
         .hero-text .serif-italic { white-space: nowrap; display: inline-block; }
+        @media (max-width: 640px) {
+            .hero-text { padding: 0 0.75rem; }
+            .hero-text .serif-italic {
+                white-space: normal;
+                display: inline;
+                font-size: clamp(1.6rem, 12vw, 3rem) !important;
+                margin-left: 0;
+                padding: 0 0.25rem;
+                line-height: 1.1;
+                overflow-wrap: anywhere;
+                word-break: break-word;
+            }
+        }
+        @media (max-width: 414px) {
+            .hero-text .serif-italic { font-size: clamp(1.6rem, 11.5vw, 2.8rem) !important; }
+        }
+        @media (max-width: 375px) {
+            .hero-text .serif-italic { font-size: clamp(1.5rem, 12vw, 2.6rem) !important; }
+        }
+        @media (max-width: 320px) {
+            .hero-text .serif-italic { font-size: clamp(1.4rem, 13vw, 2.4rem) !important; }
+        }
         
         /* Buttons & Animations */
         .btn-primary {
@@ -280,7 +302,7 @@
                     
                     <div class="pt-2">
                         <p class="text-lg text-slate-500 leading-relaxed max-w-md">
-                            ARX is a decentralized community owned citadel thats building a self-sustaining treasury for generating long-term value for all members through real-world assets.
+                            ARX is a decentralized community owned citadel thats building a self-sustaining treasury for generating long-term value for all members through the monetization of RWA's and DeFi yields.
                         </p>
                     </div>
                 </div>
@@ -299,7 +321,7 @@
                     </div>
                     <h2 class="text-5xl md:text-7xl font-bold hero-text text-black tracking-tight max-w-5xl leading-[1.1]">
                         The Financial Engine for <br>
-                        RWA Banking is called <br>
+                        RWA Co-Ownership is called <br>
                         <span class="serif-italic">ARX.</span>
                     </h2>
                 </div>
