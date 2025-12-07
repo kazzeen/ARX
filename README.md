@@ -1,3 +1,5 @@
+<img width="1024" height="1536" alt="arx" src="https://github.com/user-attachments/assets/d5aeb5e7-e99c-4f83-bd11-36fdde37411e" />
+
 # ARX
 
 ARX is a lightweight, browser-based prototype focused on testing treasury logic, price feeds, UI integration, and component update flows. The repository contains a simple HTML entry point and a set of JavaScript test scripts designed to validate behavior in the browser and against external APIs.
